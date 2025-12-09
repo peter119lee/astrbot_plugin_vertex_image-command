@@ -58,5 +58,37 @@
         "hint": "与单群调用次数上限配合使用，默认为 60 秒。",
         "default": 60,
         "obvious_hint": false
+    },
+    "safety_filter_hate_speech": {
+        "description": "仇恨言论过滤",
+        "type": "string",
+        "hint": "OFF: 关闭过滤；BLOCK_ONLY_HIGH: 仅阻止高风险；BLOCK_MEDIUM_AND_ABOVE: 阻止中等及以上；BLOCK_LOW_AND_ABOVE: 阻止低等及以上（最严格）",
+        "default": "OFF",
+        "options": ["OFF", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"],
+        "obvious_hint": false
+    },
+    "safety_filter_harassment": {
+        "description": "骚扰内容过滤",
+        "type": "string",
+        "hint": "OFF: 关闭过滤；BLOCK_ONLY_HIGH: 仅阻止高风险；BLOCK_MEDIUM_AND_ABOVE: 阻止中等及以上；BLOCK_LOW_AND_ABOVE: 阻止低等及以上（最严格）",
+        "default": "OFF",
+        "options": ["OFF", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"],
+        "obvious_hint": false
+    },
+    "safety_filter_sexually_explicit": {
+        "description": "色情内容过滤",
+        "type": "string",
+        "hint": "OFF: 关闭过滤；BLOCK_ONLY_HIGH: 仅阻止高风险；BLOCK_MEDIUM_AND_ABOVE: 阻止中等及以上；BLOCK_LOW_AND_ABOVE: 阻止低等及以上（最严格）",
+        "default": "OFF",
+        "options": ["OFF", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"],
+        "obvious_hint": false
+    },
+    "safety_filter_dangerous_content": {
+        "description": "危险内容过滤",
+        "type": "string",
+        "hint": "OFF: 关闭过滤；BLOCK_ONLY_HIGH: 仅阻止高风险；BLOCK_MEDIUM_AND_ABOVE: 阻止中等及以上；BLOCK_LOW_AND_ABOVE: 阻止低等及以上（最严格）",
+        "default": "OFF",
+        "options": ["OFF", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"],
+        "obvious_hint": false
     }
 }

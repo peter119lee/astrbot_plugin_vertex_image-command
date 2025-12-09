@@ -166,6 +166,7 @@ async def generate_image_vertex(
     input_images=None,
     max_retry_attempts: int = 3,
     data_dir=None,
+    safety_settings: dict | None = None,
 ):
     """
     使用 Google Vertex AI Gemini 模型生成图像
@@ -177,6 +178,12 @@ async def generate_image_vertex(
         input_images: 输入图像列表（base64编码）
         max_retry_attempts (int): 最大重试次数
         data_dir: 数据存储目录，用于保存生成的图像
+        safety_settings: 安全过滤器配置，包含以下可选键：
+            - hate_speech: 仇恨言论过滤阈值
+            - harassment: 骚扰内容过滤阈值
+            - sexually_explicit: 色情内容过滤阈值
+            - dangerous_content: 危险内容过滤阈值
+            阈值可选值: "OFF", "BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"
 
     Returns:
         tuple: (image_url, image_path, error_reason) 
@@ -185,6 +192,7 @@ async def generate_image_vertex(
                - "SAFETY_BLOCKED": 被安全策略阻止
                - "API_ERROR": API 配置或网络错误
                - "NO_API_KEY": 未配置 API 密钥
+               - "RATE_LIMITED": API 请求频率限制
     """
     # 标准化 API 密钥列表
     if isinstance(api_key, list):
@@ -230,6 +238,28 @@ async def generate_image_vertex(
                 })
         logger.info(f"已添加 {len(input_images)} 张参考图片")
 
+    # 构建安全过滤器配置
+    # 默认全部关闭 (OFF)，用户可通过配置自定义
+    # 注意：PROHIBITED_CONTENT (CSAM) 是不可配置的，无法关闭
+    default_thresholds = {
+        "hate_speech": "OFF",
+        "harassment": "OFF",
+        "sexually_explicit": "OFF",
+        "dangerous_content": "OFF",
+    }
+    
+    if safety_settings:
+        for key in default_thresholds:
+            if key in safety_settings and safety_settings[key]:
+                default_thresholds[key] = safety_settings[key]
+    
+    safety_settings_payload = [
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": default_thresholds["hate_speech"]},
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": default_thresholds["harassment"]},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": default_thresholds["sexually_explicit"]},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": default_thresholds["dangerous_content"]},
+    ]
+
     payload = {
         "contents": [
             {
@@ -241,11 +271,15 @@ async def generate_image_vertex(
             "temperature": 1.0,
             "topP": 0.95,
             "maxOutputTokens": 8192
-        }
+        },
+        "safetySettings": safety_settings_payload
     }
 
     timeout = aiohttp.ClientTimeout(total=120)
 
+    # 记录连续 429 错误次数，用于判断是否全部因限流失败
+    rate_limit_count = 0
+    
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for retry_attempt in range(max_retry_attempts):
             try:
@@ -374,6 +408,7 @@ async def generate_image_vertex(
                         await rotate_to_next_api_key(api_keys)
 
                     elif response.status == 429:
+                        rate_limit_count += 1
                         logger.warning("API 请求频率限制，尝试轮换密钥")
                         await rotate_to_next_api_key(api_keys)
 
@@ -404,6 +439,11 @@ async def generate_image_vertex(
                 logger.error(f"未预期的错误: {e}")
                 await rotate_to_next_api_key(api_keys)
 
+    # 判断是否全部因限流失败
+    if rate_limit_count >= max_retry_attempts:
+        logger.error("Vertex AI API 调用失败：所有重试均因频率限制 (429) 被拒绝")
+        return None, None, "RATE_LIMITED"
+    
     logger.error("Vertex AI API 调用失败，已达到最大重试次数")
     return None, None, "API_ERROR"
 

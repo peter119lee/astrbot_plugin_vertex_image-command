@@ -43,6 +43,15 @@ class MyPlugin(Star):
         self._rate_limit_state: dict[str, tuple[float, int]] = {}
         self._rate_limit_lock = asyncio.Lock()
 
+        # 安全过滤器配置
+        # 可选值: "OFF", "BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE"
+        self.safety_settings = {
+            "hate_speech": config.get("safety_filter_hate_speech", "OFF"),
+            "harassment": config.get("safety_filter_harassment", "OFF"),
+            "sexually_explicit": config.get("safety_filter_sexually_explicit", "OFF"),
+            "dangerous_content": config.get("safety_filter_dangerous_content", "OFF"),
+        }
+
     async def send_image_with_callback_api(self, image_path: str) -> Image:
         """
         优先使用callback_api_base发送图片，失败则退回到本地文件发送
@@ -104,6 +113,7 @@ class MyPlugin(Star):
             input_images=input_images,
             max_retry_attempts=self.max_retry_attempts,
             data_dir=data_dir,
+            safety_settings=self.safety_settings,
         )
 
     @staticmethod
@@ -264,6 +274,8 @@ class MyPlugin(Star):
             return f"⚠️ {command_name}被安全策略阻止，请尝试调整提示词或更换图片后重试。"
         if error_reason == "NO_API_KEY":
             return f"{command_name}失败：未配置 Vertex AI API 密钥。"
+        if error_reason == "RATE_LIMITED":
+            return f"⏳ {command_name}失败：API 请求频率超限，请稍后再试。"
         # API_ERROR 或其他未知错误
         return f"{command_name}失败，请检查 Vertex AI API 配置和网络连接。"
 
