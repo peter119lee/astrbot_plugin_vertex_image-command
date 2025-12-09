@@ -5,6 +5,7 @@ import base64
 import json
 import uuid
 import re
+import random
 from datetime import datetime, timedelta
 from pathlib import Path
 from astrbot.api import logger
@@ -74,17 +75,9 @@ async def cleanup_old_images(data_dir=None):
         cutoff_time = current_time - timedelta(minutes=15)
 
         # 查找images目录下的所有图像文件
-        image_patterns = [
-            "vertex_image_*.png",
-            "vertex_image_*.jpg",
-            "vertex_image_*.jpeg",
-            "gemini_image_*.png",
-            "gemini_image_*.jpg",
-            "gemini_image_*.jpeg",
-        ]
-
-        for pattern in image_patterns:
-            for file_path in images_dir.glob(pattern):
+        # B-01: 优化为一次遍历，减少 IO
+        for file_path in images_dir.iterdir():
+            if file_path.is_file() and file_path.name.startswith(("vertex_image_", "gemini_image_")):
                 try:
                     file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
                     if file_mtime < cutoff_time:
@@ -117,8 +110,9 @@ async def save_base64_image(base64_string, image_format="png", data_dir=None):
         images_dir = data_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
 
-        # 清理过期图像
-        await cleanup_old_images(data_dir)
+        # B-01: 概率触发清理 (5%)，且不阻塞当前请求
+        if random.random() < 0.05:
+            asyncio.create_task(cleanup_old_images(data_dir))
 
         # 生成唯一文件名
         unique_id = uuid.uuid4().hex[:8]
