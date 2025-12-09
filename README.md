@@ -12,6 +12,8 @@
 - 🧹 **自动清理**: 自动清理超过15分钟的历史图像文件
 - 🔒 **群过滤**: 支持白名单/黑名单模式的群过滤
 - ⏱️ **限流控制**: 支持按群配置调用频率限制
+- 🛡️ **安全增强**: 内置 SSRF 防护，防止内网探测攻击
+- 🚦 **并发控制**: 全局并发请求限制，防止服务器过载
 
 ## 安装配置
 
@@ -106,6 +108,7 @@ astrbot_plugin_vertex_image-command/
 │   ├── ttp.py            # Vertex AI API 调用
 │   └── file_send_server.py # 文件传输工具
 ├── images/               # 生成的图像存储目录
+├── requirements.txt    # 依赖文件
 ├── LICENSE              # 许可证文件
 └── README.md           # 项目说明文档
 ```
@@ -128,4 +131,4 @@ astrbot_plugin_vertex_image-command/
 
 主要改动：将后端 API 从 OpenAI 兼容格式更换为 Google Vertex AI Gemini API，以便使用 Google Cloud 的图像生成服务。
 
-本插件的开发过程中使用了 **Claude** 辅助编程。
+本插件的开发过程中使用了 **Claude & Gemini** 辅助编程。
