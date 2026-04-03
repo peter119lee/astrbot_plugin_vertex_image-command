@@ -5,9 +5,10 @@
 ## 功能特点
 
 - 🖼️ **Vertex AI Gemini 图像生成**: 使用 Google Vertex AI Gemini 模型生成图片
-- 🎨 **参考图片支持**: 支持基于参考图片进行图像生成和编辑
+- 🎨 **多步骤改图会话**: 逐条发送多张图片 + 文字描述，交互式改图
+- 📐 **宽高比控制**: 支持配置输出图像宽高比（1:1, 16:9, 9:16, 4:3, 3:4）
 - ♻️ **智能重试机制**: 支持可配置的自动重试，提高请求成功率和稳定性
-- � **异步处理**: 基于 asyncio 的高性能异步图像生成
+- 🔇 **临时消息**: 会话状态提示 5 秒后自动撤回，减少群消息刷屏
 - 🔗 **智能文件传输**: 支持本地和远程服务器的文件传输
 - 🧹 **自动清理**: 自动清理超过15分钟的历史图像文件
 - 🔒 **群过滤**: 支持白名单/黑名单模式的群过滤
@@ -29,9 +30,13 @@
 
 在 AstrBot 插件市场搜索 `vertex` 或 `Vertex AI` 安装本插件。
 
-> ⚠️ **注意**：如果之前安装过其他使用相同指令的图像生成插件（如 `astrbot_plugin_openai_image-command`），请先**停用该插件并重启 AstrBot**，否则两个插件会同时响应同一条指令。好消息是 AstrBot 的缓存回收机制正常工作，停用后立即生效，无需重启。
+> ⚠️ **注意**：如果之前安装过其他使用相同指令的图像生成插件（如 `astrbot_plugin_openai_image-command`），请先**停用该插件并重启 AstrBot**，否则两个插件会同时响应同一条指令。
 
-### 3. 配置参数
+### 3. 配置指令前缀
+
+本插件的指令使用英文名称（`nano`、`edit`、`ok`、`cancel`、`imghelp`）。指令前缀由 AstrBot 全局设置控制，建议在 AstrBot 管理后台将指令前缀设为 `#`，即可使用 `#nano`、`#edit` 等指令。
+
+### 4. 配置参数
 
 #### 通过Web界面配置
 
@@ -47,50 +52,52 @@
   - 默认值：`gemini-3-pro-image-preview`
   - 可用模型参考：[Vertex AI 图像生成模型](https://cloud.google.com/vertex-ai/generative-ai/docs/image/generate-images#img-gen-models)
 
+- **aspect_ratio**: 生成图像的宽高比，留空则由模型自动决定
+  - 可选值：`1:1`、`16:9`、`9:16`、`4:3`、`3:4`
+  - 分辨率由模型决定（gemini-3-pro 最高 4096px，gemini-2.5-flash 最高 1024px）
+
 - **max_retry_attempts**: 每个请求的最大重试次数（默认：3 次，推荐 2-5 次）
-- **nap_server_address**: NAP cat 服务地址（同服务器填写 `localhost`）
+- **nap_server_address**: NAPcat 服务地址（同服务器填写 `localhost`）
 - **nap_server_port**: 文件传输端口（默认 3658）
 - **group_filter_mode**: 群过滤模式，可选 `none` / `whitelist` / `blacklist`：
   - `none`: 不做群过滤（默认）；
   - `whitelist`: 仅名单内群允许使用插件指令；
   - `blacklist`: 名单内群不会响应插件指令。
-- **group_filter_list**: 群过滤名单（字符串列表）。结合 `group_filter_mode` 使用：
-  - 当为 `whitelist` 时，列表作为白名单；
-  - 当为 `blacklist` 时，列表作为黑名单；
-  - `none` 时此列表不生效。
+- **group_filter_list**: 群过滤名单（字符串列表）。结合 `group_filter_mode` 使用。
 - **rate_limit_max_calls_per_group**: 单群在一个限流周期内允许调用插件指令的最大次数。设置为 `0` 表示不启用限流。
-- **rate_limit_period_seconds**: 限流周期长度（秒），与 `rate_limit_max_calls_per_group` 搭配使用，默认 `60` 秒。
+- **rate_limit_period_seconds**: 限流周期长度（秒），默认 `60` 秒。
 
-## 技术实现
-
-### 核心组件
-
-- **main.py**: 插件主要逻辑，继承自 AstrBot 的 Star 类
-- **utils/ttp.py**: Vertex AI Gemini API 调用和图像处理逻辑
-- **utils/file_send_server.py**: 文件传输工具
-
-### 支持的指令
+## 支持的指令
 
 | 指令 | 说明 | 用法示例 |
 |------|------|----------|
-| `/生图` | 根据文字描述生成图片 | `/生图 一只橙色猫咪` |
-| `/改图` | 基于已有图片进行改图 | 发送图片后 `/改图 变成水彩风格` |
-| `/img帮助` | 列出本插件支持的指令 | `/img帮助` |
+| `#nano` | 根据文字描述生成图片 | `#nano 一只橙色猫咪` |
+| `#edit` | 开启多步骤改图会话 | `#edit` |
+| `#ok` | 确认改图会话，开始处理 | `#ok` |
+| `#cancel` | 取消当前改图会话 | `#cancel` |
+| `#imghelp` | 列出本插件支持的指令 | `#imghelp` |
 
-### `/改图` 指令用法
+### `#edit` 改图流程
 
-支持以下格式（群聊中需要先 @Bot 唤醒）：
+改图采用多步骤会话模式，方便逐条发送多张图片：
 
 ```
-✅ 图片 + /改图 描述       （推荐）
-✅ /改图 描述 + 图片
-✅ 回复图片消息 + /改图 描述
-❌ /改图 + 图片 + 描述     （不支持，图片在指令和描述中间）
+1. 发送 #edit         → 开启改图会话
+2. 发送图片1          → 「已收到 1 张图片（共 1 张）」
+3. 发送图片2          → 「已收到 1 张图片（共 2 张）」
+4. 发送文字描述       → 「已收到描述文字：「...」」
+5. 发送 #ok           → 开始处理改图
 ```
 
-> ⚠️ **已知限制**：使用「回复图片消息」方式时，AstrBot 框架可能无法获取被引用消息中的图片（aiocqhttp 适配器仅传递引用消息 ID，不一定包含图片内容）。如遇此问题，建议使用「图片 + /改图 描述」的方式。
+**注意事项：**
+- 会话状态提示（收到图片、收到描述等）会在 **5 秒后自动撤回**，不会刷屏
+- 超过 **60 秒** 未操作会自动取消会话
+- 发送 `#cancel` 可随时取消
+- 最终的改图结果不会被撤回
+- `#edit` 消息中也可以直接附带图片
+- 如未发送描述文字，默认使用"保持主体内容不变，进行美化"
 
-**多图支持**：所有图片相关指令都支持同时发送多张参考图片（最多 9 张）
+> ⚠️ **已知限制**：使用「回复图片消息」方式时，AstrBot 框架可能无法获取被引用消息中的图片（aiocqhttp 适配器仅传递引用消息 ID，不一定包含图片内容）。如遇此问题，建议直接发送图片。
 
 ### 支持的模型
 
@@ -123,12 +130,10 @@ astrbot_plugin_vertex_image-command/
 - **文件传输异常捕获**: 网络传输失败时的错误提示
 - **自动清理失败处理**: 清理历史文件时的异常保护
 - **安全过滤处理**: 当图像被安全策略阻止时的友好提示
-- **详细的错误日志输出**: 便于调试和问题定位
+- **临时消息撤回失败处理**: 无权限撤回时静默降级
 
 ## 致谢
 
-本插件基于 [AstrBot_plugin_openai_image-command](https://github.com/exynos967/AstrBot_plugin_openai_image-command) 修改而来，感谢原作者 **薄暝 (exynos967)** 
+本插件基于 [AstrBot_plugin_openai_image-command](https://github.com/exynos967/AstrBot_plugin_openai_image-command) 修改而来，感谢原作者 **薄暝 (exynos967)**
 
 主要改动：将后端 API 从 OpenAI 兼容格式更换为 Google Vertex AI Gemini API，以便使用 Google Cloud 的图像生成服务。
-
-本插件的开发过程中使用了 **Claude & Gemini** 辅助编程。
