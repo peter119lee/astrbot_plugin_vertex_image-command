@@ -54,6 +54,50 @@ _DATA_URL_PATTERN = re.compile(
     r"(data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+)"
 )
 _HTTP_URL_PATTERN = re.compile(r"(https?://[^\s)]+)")
+_SUPPORTED_ASPECT_RATIOS = {
+    "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9",
+}
+_IMAGE_SIZE_MAP = {
+    1024: "1K",
+    2048: "2K",
+    4096: "4K",
+}
+
+
+def _normalize_aspect_ratio(value: str | None) -> str:
+    """标准化宽高比；无效值返回空字符串，避免请求 400。"""
+    ratio = (value or "").strip()
+    if not ratio:
+        return ""
+    if ratio not in _SUPPORTED_ASPECT_RATIOS:
+        logger.warning(f"忽略不支持的宽高比参数: {ratio}")
+        return ""
+    return ratio
+
+
+def _normalize_image_size(value: int | str | None) -> str:
+    """将分辨率值映射为 Vertex API 接受的 imageSize。"""
+    if value in (None, "", 0, "0"):
+        return ""
+
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized in {"1K", "2K", "4K"}:
+            return normalized
+        try:
+            value = int(normalized)
+        except ValueError:
+            logger.warning(f"忽略无法识别的分辨率参数: {value}")
+            return ""
+
+    if isinstance(value, int):
+        image_size = _IMAGE_SIZE_MAP.get(value, "")
+        if not image_size:
+            logger.warning(f"忽略不支持的分辨率参数: {value}")
+        return image_size
+
+    logger.warning(f"忽略无法识别的分辨率参数类型: {type(value)}")
+    return ""
 
 
 async def cleanup_old_images(data_dir=None):
@@ -209,18 +253,18 @@ async def generate_image_vertex(
     # 构建 Vertex AI API URL
     base_url = "https://aiplatform.googleapis.com/v1/publishers/google/models"
     
+    normalized_aspect_ratio = _normalize_aspect_ratio(aspect_ratio)
+    normalized_image_size = _normalize_image_size(resolution)
+
     # 构建请求内容
     parts = []
     
     # 添加文本提示
-    # 添加明确的图像生成指令
-    extra_hints = []
-    if aspect_ratio:
-        extra_hints.append(f"The image aspect ratio should be {aspect_ratio}.")
-    if resolution:
-        extra_hints.append(f"The output image resolution should be {resolution}px on the longest side.")
-    hint_str = " " + " ".join(extra_hints) if extra_hints else ""
-    full_prompt = f"Generate an image based on the following description. Output only the image, no text explanation needed.{hint_str}\n\n{prompt}"
+    full_prompt = (
+        "Generate an image based on the following description. "
+        "Output only the image, no text explanation needed.\n\n"
+        f"{prompt}"
+    )
     parts.append({"text": full_prompt})
     
     # 添加输入图像（如果有）
@@ -272,8 +316,13 @@ async def generate_image_vertex(
         "maxOutputTokens": 8192,
     }
 
-    if aspect_ratio:
-        generation_config["aspectRatio"] = aspect_ratio
+    image_config = {}
+    if normalized_aspect_ratio:
+        image_config["aspectRatio"] = normalized_aspect_ratio
+    if normalized_image_size:
+        image_config["imageSize"] = normalized_image_size
+    if image_config:
+        generation_config["imageConfig"] = image_config
 
     payload = {
         "contents": [
@@ -419,7 +468,11 @@ async def generate_image_vertex(
                         await rotate_to_next_api_key(api_keys)
 
                     elif response.status == 400:
-                        logger.error(f"请求参数错误: {response_text[:500]}")
+                        logger.error(
+                            f"请求参数错误: aspect_ratio={normalized_aspect_ratio or 'auto'}, "
+                            f"image_size={normalized_image_size or 'auto'}, "
+                            f"response={response_text[:500]}"
+                        )
                         # 400 错误通常是请求格式问题，不需要轮换密钥
                         return None, None, "BAD_REQUEST"
 

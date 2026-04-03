@@ -434,7 +434,7 @@ class MyPlugin(Star):
         if error_reason == "BAD_REQUEST":
             return (
                 f"{command_name}失败：请求参数不被当前模型接受。"
-                "请检查模型名、分辨率和参考图数量后重试。"
+                "请检查模型名、宽高比、分辨率和参考图数量后重试。"
             )
         return f"{command_name}失败，请检查 Vertex AI API 配置和网络连接。"
 
