@@ -22,6 +22,7 @@ class EditSession:
     """多步骤改图会话状态"""
     images: list = field(default_factory=list)
     description: str = ""
+    ratio: str = ""
     created_at: float = field(default_factory=time.time)
 
 
@@ -116,6 +117,20 @@ class MyPlugin(Star):
                     client = pm.get_client('aiocqhttp')
         return client
 
+    # ── 图像生成配置辅助 ───────────────────────────────────────────
+
+    _VALID_RATIOS = {"1:1", "16:9", "9:16", "4:3", "3:4"}
+
+    def _parse_ratio_from_text(self, text: str) -> tuple[str, str]:
+        """从文本开头提取宽高比（如果有），返回 (ratio, remaining_text)。
+        如果文本不以有效比例开头，返回全局配置的 aspect_ratio。"""
+        stripped = text.strip()
+        first_word = stripped.split(None, 1)[0] if stripped else ""
+        if first_word in self._VALID_RATIOS:
+            remaining = stripped[len(first_word):].strip()
+            return first_word, remaining
+        return self.aspect_ratio, stripped
+
     async def _send_ephemeral(self, event: AstrMessageEvent, text: str, delay: float = 5.0) -> bool:
         """发送临时消息，delay 秒后自动撤回。成功返回 True，失败返回 False。"""
         try:
@@ -202,7 +217,7 @@ class MyPlugin(Star):
 
     # ── Vertex AI 生成 ────────────────────────────────────────────
 
-    async def _generate_image_via_provider(self, prompt: str, input_images: list | None):
+    async def _generate_image_via_provider(self, prompt: str, input_images: list | None, aspect_ratio: str = ""):
         """
         调用 Vertex AI 图像生成。
 
@@ -227,7 +242,7 @@ class MyPlugin(Star):
             max_retry_attempts=self.max_retry_attempts,
             data_dir=data_dir,
             safety_settings=self.safety_settings,
-            aspect_ratio=self.aspect_ratio,
+            aspect_ratio=aspect_ratio or self.aspect_ratio,
         )
 
     # ── 配置规范化 ────────────────────────────────────────────────
@@ -537,8 +552,18 @@ class MyPlugin(Star):
 
         if not image_description:
             yield event.plain_result(
-                "请提供要生成图像的文字描述，例如：/nano 一只坐在键盘上的橙色猫，赛博朋克风格。"
+                "请提供要生成图像的文字描述，例如：\n"
+                "/nano 一只坐在键盘上的橙色猫\n"
+                "/nano 16:9 赛博朋克风格的城市夜景\n"
+                "支持的宽高比：1:1, 16:9, 9:16, 4:3, 3:4"
             )
+            return
+
+        # 从描述开头解析宽高比（如 "/nano 16:9 描述"）
+        ratio, image_description = self._parse_ratio_from_text(image_description)
+
+        if not image_description:
+            yield event.plain_result("请在宽高比后面提供图像描述。")
             return
 
         input_images: list = []
@@ -548,6 +573,7 @@ class MyPlugin(Star):
                 image_url, image_path, error_reason = await self._generate_image_via_provider(
                     image_description,
                     input_images=input_images,
+                    aspect_ratio=ratio,
                 )
 
             if not image_url or not image_path:
@@ -640,6 +666,7 @@ class MyPlugin(Star):
                 image_url, image_path, error_reason = await self._generate_image_via_provider(
                     description,
                     input_images=session.images,
+                    aspect_ratio=session.ratio,
                 )
 
             if not image_url or not image_path:
@@ -712,9 +739,14 @@ class MyPlugin(Star):
         # 收集文字描述（只有非空文本才处理）
         text = msg_stripped
         if text:
-            session.description = text
+            # 从描述开头解析宽高比
+            ratio, desc_text = self._parse_ratio_from_text(text)
+            if ratio:
+                session.ratio = ratio
+            session.description = desc_text or text
+            ratio_hint = f"（宽高比: {session.ratio}）" if session.ratio else ""
             desc_msg = (
-                f"已收到描述文字：「{text[:50]}{'…' if len(text) > 50 else ''}」\n"
+                f"已收到描述文字{ratio_hint}：「{session.description[:50]}{'…' if len(session.description) > 50 else ''}」\n"
                 "发送 /ok 开始处理，或继续发送图片/修改描述。"
             )
             if not await self._send_ephemeral(event, desc_msg):
@@ -732,14 +764,19 @@ class MyPlugin(Star):
             "本插件支持的图像相关指令：",
             "",
             "/nano 文本 —— 根据文字描述生成图片",
+            "/nano 比例 文本 —— 指定宽高比生成图片",
+            "  例：/nano 16:9 赛博朋克风格的城市夜景",
             "",
             "/edit —— 开启改图会话（多步骤）",
             "  1. 发送 /edit 开始",
             "  2. 逐条发送图片（支持多张）",
-            "  3. 发送文字描述",
+            "  3. 发送文字描述（可在开头加宽高比）",
             "  4. 发送 /ok 开始处理",
             "  * 发送 /cancel 取消",
             "  * 超过 60 秒未操作自动取消",
+            "",
+            "宽高比可选值：1:1, 16:9, 9:16, 4:3, 3:4",
+            "分辨率由模型决定（gemini-3-pro 最高 4096px）",
             "",
             "/imghelp —— 显示此帮助信息",
         ]
