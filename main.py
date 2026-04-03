@@ -16,7 +16,7 @@ from .utils.ttp import generate_image_vertex
 from .utils.file_send_server import send_file
 
 
-@register("astrbot_plugin_vertex_image-command", "YanL", "使用 Google Vertex AI 生成图片", "1.0.0")
+@register("astrbot_plugin_vertex_image_command", "YanL", "使用 Google Vertex AI 生成图片", "1.0.0")
 class MyPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)

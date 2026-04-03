@@ -1,4 +1,4 @@
-name: astrbot_plugin_vertex_image-command
+name: astrbot_plugin_vertex_image_command
 description: 使用 Google Vertex AI 生成图片（基于薄暝的插件修改）
 author: YanL
 version: 1.0.0
