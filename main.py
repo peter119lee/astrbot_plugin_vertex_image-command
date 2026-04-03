@@ -516,7 +516,7 @@ class MyPlugin(Star):
         event: AstrMessageEvent,
         image_description: str = "",
     ):
-        """纯文本生图指令 #nano，根据文字描述生成图片。"""
+        """纯文本生图指令 /nano，根据文字描述生成图片。"""
         if not self._is_group_allowed(event):
             return
 
@@ -537,7 +537,7 @@ class MyPlugin(Star):
 
         if not image_description:
             yield event.plain_result(
-                "请提供要生成图像的文字描述，例如：#nano 一只坐在键盘上的橙色猫，赛博朋克风格。"
+                "请提供要生成图像的文字描述，例如：/nano 一只坐在键盘上的橙色猫，赛博朋克风格。"
             )
             return
 
@@ -571,11 +571,11 @@ class MyPlugin(Star):
             logger.error(f"图像生成过程出现未预期的错误: {e}")
             yield event.chain_result([Plain(f"图像生成失败: {str(e)}")])
 
-    # ── #edit：开启改图会话 ───────────────────────────────────────
+    # ── /edit：开启改图会话 ───────────────────────────────────────
 
     @filter.command("edit")
     async def edit_start(self, event: AstrMessageEvent):
-        """开启多步骤改图会话。发送 #edit 后逐条发送图片和描述文字，最后发送 #ok 确认。"""
+        """开启多步骤改图会话。发送 /edit 后逐条发送图片和描述文字，最后发送 /ok 确认。"""
         if not self._is_group_allowed(event):
             return
 
@@ -597,13 +597,13 @@ class MyPlugin(Star):
         hint_msg = (
             f"编辑会话已开始！{img_hint}\n"
             "请逐条发送图片，然后发送文字描述。\n"
-            "完成后发送 #ok 开始处理，发送 #cancel 取消。\n"
+            "完成后发送 /ok 开始处理，发送 /cancel 取消。\n"
             "超过 60 秒未操作将自动取消。"
         )
         if not await self._send_ephemeral(event, hint_msg):
             yield event.plain_result(hint_msg)
 
-    # ── #ok：确认并执行改图 ───────────────────────────────────────
+    # ── /ok：确认并执行改图 ───────────────────────────────────────
 
     @filter.command("ok")
     async def edit_confirm(self, event: AstrMessageEvent):
@@ -613,7 +613,7 @@ class MyPlugin(Star):
 
         if session is None and key in self._edit_sessions:
             # 会话存在但已超时（_get_active_session 已清理）
-            timeout_msg = "编辑会话已超时，已自动取消。请重新发送 #edit 开始。"
+            timeout_msg = "编辑会话已超时，已自动取消。请重新发送 /edit 开始。"
             if not await self._send_ephemeral(event, timeout_msg):
                 yield event.plain_result(timeout_msg)
             return
@@ -660,7 +660,7 @@ class MyPlugin(Star):
             logger.error(f"改图过程出现未预期的错误: {e}")
             yield event.chain_result([Plain(f"改图失败: {str(e)}")])
 
-    # ── #cancel：取消改图会话 ─────────────────────────────────────
+    # ── /cancel：取消改图会话 ─────────────────────────────────────
 
     @filter.command("cancel")
     async def edit_cancel(self, event: AstrMessageEvent):
@@ -689,7 +689,7 @@ class MyPlugin(Star):
         if session is None:
             if key in self._edit_sessions:
                 # 超时了，通知用户
-                timeout_msg = "编辑会话已超时，已自动取消。请重新发送 #edit 开始。"
+                timeout_msg = "编辑会话已超时，已自动取消。请重新发送 /edit 开始。"
                 if not await self._send_ephemeral(event, timeout_msg):
                     yield event.plain_result(timeout_msg)
             return
@@ -703,7 +703,7 @@ class MyPlugin(Star):
             session.images.extend(new_images)
             img_msg = (
                 f"已收到 {len(new_images)} 张图片（共 {len(session.images)} 张）。\n"
-                "继续发送图片/描述，或发送 #ok 开始处理。"
+                "继续发送图片/描述，或发送 /ok 开始处理。"
             )
             if not await self._send_ephemeral(event, img_msg):
                 yield event.plain_result(img_msg)
@@ -715,12 +715,12 @@ class MyPlugin(Star):
             session.description = text
             desc_msg = (
                 f"已收到描述文字：「{text[:50]}{'…' if len(text) > 50 else ''}」\n"
-                "发送 #ok 开始处理，或继续发送图片/修改描述。"
+                "发送 /ok 开始处理，或继续发送图片/修改描述。"
             )
             if not await self._send_ephemeral(event, desc_msg):
                 yield event.plain_result(desc_msg)
 
-    # ── #imghelp：帮助信息 ────────────────────────────────────────
+    # ── /imghelp：帮助信息 ────────────────────────────────────────
 
     @filter.command("imghelp")
     async def img_help(self, event: AstrMessageEvent):
@@ -731,16 +731,16 @@ class MyPlugin(Star):
         lines = [
             "本插件支持的图像相关指令：",
             "",
-            "#nano 文本 —— 根据文字描述生成图片",
+            "/nano 文本 —— 根据文字描述生成图片",
             "",
-            "#edit —— 开启改图会话（多步骤）",
-            "  1. 发送 #edit 开始",
+            "/edit —— 开启改图会话（多步骤）",
+            "  1. 发送 /edit 开始",
             "  2. 逐条发送图片（支持多张）",
             "  3. 发送文字描述",
-            "  4. 发送 #ok 开始处理",
-            "  * 发送 #cancel 取消",
+            "  4. 发送 /ok 开始处理",
+            "  * 发送 /cancel 取消",
             "  * 超过 60 秒未操作自动取消",
             "",
-            "#imghelp —— 显示此帮助信息",
+            "/imghelp —— 显示此帮助信息",
         ]
         yield event.plain_result("\n".join(lines))
