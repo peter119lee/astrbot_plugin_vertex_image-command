@@ -600,7 +600,11 @@ class MyPlugin(Star):
         nap_server_address = self.nap_server_address
         nap_server_port = self.nap_server_port
 
-        if not image_description:
+        # 始终从原始消息中重提完整文本，避免框架参数绑定丢失 -s / --2k 等标志。
+        extracted_description = self._extract_text_from_message(event, "nano")
+        if extracted_description:
+            image_description = extracted_description
+        elif not image_description:
             raw = getattr(event, "message_str", "") or ""
             parts = raw.strip().split(" ", 1)
             if len(parts) == 2:
@@ -619,6 +623,11 @@ class MyPlugin(Star):
 
         # 解析 midjourney 风格标志（如 --16:9 -l --2k）
         ratio, resolution, image_description = self._parse_flags(image_description)
+        logger.info(
+            "解析图像参数: "
+            f"ratio={ratio or 'auto'}, resolution={resolution or 0}, "
+            f"prompt={image_description[:80]}"
+        )
 
         if not image_description:
             yield event.plain_result("请在标志后面提供图像描述。")

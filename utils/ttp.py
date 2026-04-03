@@ -255,6 +255,11 @@ async def generate_image_vertex(
     
     normalized_aspect_ratio = _normalize_aspect_ratio(aspect_ratio)
     normalized_image_size = _normalize_image_size(resolution)
+    logger.info(
+        "Vertex 图像参数: "
+        f"model={model}, aspect_ratio={normalized_aspect_ratio or 'auto'}, "
+        f"image_size={normalized_image_size or 'auto'}, input_images={len(input_images or [])}"
+    )
 
     # 构建请求内容
     parts = []
