@@ -21,11 +21,19 @@
         "obvious_hint": true
     },
     "aspect_ratio": {
-        "description": "生成图像的宽高比",
+        "description": "生成图像的默认宽高比",
         "type": "string",
-        "hint": "留空则由模型自动决定。可选值: 1:1, 16:9, 9:16, 4:3, 3:4。分辨率由模型决定（gemini-3-pro 最高 4096px，gemini-2.5-flash 最高 1024px）。",
+        "hint": "留空则由模型自动决定。也可在指令中用 --16:9 / -l 等标志覆盖。",
         "default": "",
         "options": ["", "1:1", "16:9", "9:16", "4:3", "3:4"],
+        "obvious_hint": true
+    },
+    "default_resolution": {
+        "description": "生成图像的默认分辨率（像素）",
+        "type": "int",
+        "hint": "0 表示由模型自动决定。也可在指令中用 --1k / --2k / --4k 标志覆盖。注意：实际分辨率受模型能力限制。",
+        "default": 0,
+        "options": [0, 1024, 2048, 4096],
         "obvious_hint": true
     },
     "nap_server_address": {
