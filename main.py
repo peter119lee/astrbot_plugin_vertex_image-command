@@ -98,6 +98,81 @@ class MyPlugin(Star):
             return None
         return session
 
+    def _get_bot_client(self, event: AstrMessageEvent):
+        """尝试从 event 中获取底层 OneBot client 实例"""
+        client = None
+        if hasattr(event, 'raw_event') and event.raw_event:
+            raw = event.raw_event
+            if hasattr(raw, 'bot'):
+                client = raw.bot
+            elif hasattr(raw, '_bot'):
+                client = raw._bot
+        if not client and hasattr(self, 'context') and self.context:
+            if hasattr(self.context, 'get_platform_client'):
+                client = self.context.get_platform_client()
+            elif hasattr(self.context, 'platform_manager'):
+                pm = self.context.platform_manager
+                if hasattr(pm, 'get_client'):
+                    client = pm.get_client('aiocqhttp')
+        return client
+
+    async def _send_ephemeral(self, event: AstrMessageEvent, text: str, delay: float = 5.0) -> bool:
+        """发送临时消息，delay 秒后自动撤回。成功返回 True，失败返回 False。"""
+        try:
+            client = self._get_bot_client(event)
+            if not client:
+                return False
+
+            group_id = None
+            user_id = None
+            try:
+                group_id = event.get_group_id()
+            except AttributeError:
+                pass
+            try:
+                user_id = event.get_sender_id()
+            except AttributeError:
+                pass
+
+            result = None
+            if group_id:
+                if hasattr(client, 'call_api'):
+                    result = await client.call_api('send_group_msg', group_id=int(group_id), message=text)
+                elif hasattr(client, 'send_group_msg'):
+                    result = await client.send_group_msg(group_id=int(group_id), message=text)
+            elif user_id:
+                if hasattr(client, 'call_api'):
+                    result = await client.call_api('send_private_msg', user_id=int(user_id), message=text)
+                elif hasattr(client, 'send_private_msg'):
+                    result = await client.send_private_msg(user_id=int(user_id), message=text)
+
+            if not result:
+                return False
+
+            msg_id = None
+            if isinstance(result, dict):
+                msg_id = result.get('message_id')
+            elif hasattr(result, 'message_id'):
+                msg_id = result.message_id
+
+            if msg_id:
+                async def _delete_later():
+                    await asyncio.sleep(delay)
+                    try:
+                        if hasattr(client, 'call_api'):
+                            await client.call_api('delete_msg', message_id=int(msg_id))
+                        elif hasattr(client, 'delete_msg'):
+                            await client.delete_msg(message_id=int(msg_id))
+                    except Exception as e:
+                        logger.debug(f"撤回消息失败（可能无权限）: {e}")
+
+                asyncio.create_task(_delete_later())
+            return True
+
+        except Exception as e:
+            logger.debug(f"发送临时消息失败: {e}")
+            return False
+
     # ── 图片发送 ──────────────────────────────────────────────────
 
     async def send_image_with_callback_api(self, image_path: str) -> Image:
@@ -346,20 +421,7 @@ class MyPlugin(Star):
         """通过 OneBot API 获取被引用消息中的图片。"""
         images: list[str] = []
         try:
-            client = None
-            if hasattr(event, 'raw_event') and event.raw_event:
-                raw = event.raw_event
-                if hasattr(raw, 'bot'):
-                    client = raw.bot
-                elif hasattr(raw, '_bot'):
-                    client = raw._bot
-            if not client and hasattr(self, 'context') and self.context:
-                if hasattr(self.context, 'get_platform_client'):
-                    client = self.context.get_platform_client()
-                elif hasattr(self.context, 'platform_manager'):
-                    pm = self.context.platform_manager
-                    if hasattr(pm, 'get_client'):
-                        client = pm.get_client('aiocqhttp')
+            client = self._get_bot_client(event)
             if not client:
                 logger.debug("无法获取底层 client，跳过 API 获取")
                 return images
@@ -532,12 +594,14 @@ class MyPlugin(Star):
         )
 
         img_hint = f"已收到 {len(initial_images)} 张图片。" if initial_images else ""
-        yield event.plain_result(
+        hint_msg = (
             f"编辑会话已开始！{img_hint}\n"
             "请逐条发送图片，然后发送文字描述。\n"
             "完成后发送 #ok 开始处理，发送 #cancel 取消。\n"
             "超过 60 秒未操作将自动取消。"
         )
+        if not await self._send_ephemeral(event, hint_msg):
+            yield event.plain_result(hint_msg)
 
     # ── #ok：确认并执行改图 ───────────────────────────────────────
 
@@ -549,7 +613,9 @@ class MyPlugin(Star):
 
         if session is None and key in self._edit_sessions:
             # 会话存在但已超时（_get_active_session 已清理）
-            yield event.plain_result("编辑会话已超时，已自动取消。请重新发送 #edit 开始。")
+            timeout_msg = "编辑会话已超时，已自动取消。请重新发送 #edit 开始。"
+            if not await self._send_ephemeral(event, timeout_msg):
+                yield event.plain_result(timeout_msg)
             return
 
         if session is None:
@@ -560,7 +626,9 @@ class MyPlugin(Star):
         del self._edit_sessions[key]
 
         if not session.images:
-            yield event.plain_result("未收到任何图片，编辑已取消。")
+            no_img_msg = "未收到任何图片，编辑已取消。"
+            if not await self._send_ephemeral(event, no_img_msg):
+                yield event.plain_result(no_img_msg)
             return
 
         description = session.description or "请在保持主体内容不变的前提下，对这张图片进行美化。"
@@ -600,7 +668,9 @@ class MyPlugin(Star):
         key = self._get_session_key(event)
         if key in self._edit_sessions:
             del self._edit_sessions[key]
-            yield event.plain_result("编辑会话已取消。")
+            cancel_msg = "编辑会话已取消。"
+            if not await self._send_ephemeral(event, cancel_msg):
+                yield event.plain_result(cancel_msg)
 
     # ── 会话输入：捕获图片和文字描述 ─────────────────────────────
 
@@ -619,7 +689,9 @@ class MyPlugin(Star):
         if session is None:
             if key in self._edit_sessions:
                 # 超时了，通知用户
-                yield event.plain_result("编辑会话已超时，已自动取消。请重新发送 #edit 开始。")
+                timeout_msg = "编辑会话已超时，已自动取消。请重新发送 #edit 开始。"
+                if not await self._send_ephemeral(event, timeout_msg):
+                    yield event.plain_result(timeout_msg)
             return
 
         # 刷新会话时间
@@ -629,20 +701,24 @@ class MyPlugin(Star):
         new_images = await self._collect_input_images(event)
         if new_images:
             session.images.extend(new_images)
-            yield event.plain_result(
+            img_msg = (
                 f"已收到 {len(new_images)} 张图片（共 {len(session.images)} 张）。\n"
                 "继续发送图片/描述，或发送 #ok 开始处理。"
             )
+            if not await self._send_ephemeral(event, img_msg):
+                yield event.plain_result(img_msg)
             return
 
         # 收集文字描述（只有非空文本才处理）
         text = msg_stripped
         if text:
             session.description = text
-            yield event.plain_result(
+            desc_msg = (
                 f"已收到描述文字：「{text[:50]}{'…' if len(text) > 50 else ''}」\n"
                 "发送 #ok 开始处理，或继续发送图片/修改描述。"
             )
+            if not await self._send_ephemeral(event, desc_msg):
+                yield event.plain_result(desc_msg)
 
     # ── #imghelp：帮助信息 ────────────────────────────────────────
 
