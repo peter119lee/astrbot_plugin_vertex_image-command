@@ -546,13 +546,13 @@ class MyPlugin(Star):
         
         return full_text
 
-    @filter.command("生图")
+    @filter.command("nano")
     async def generate_image_command(
         self,
         event: AstrMessageEvent,
         image_description: str = "",
     ):
-        """纯文本生图指令 `/生图`，专注于根据文字描述生成图片。"""
+        """Text-to-image command `/nano`. Generates images from text descriptions."""
         if not self._is_group_allowed(event):
             return
 
@@ -574,7 +574,7 @@ class MyPlugin(Star):
 
         if not image_description:
             yield event.plain_result(
-                "请提供要生成图像的文字描述，例如：/生图 一只坐在键盘上的橙色猫，赛博朋克风格。"
+                "请提供要生成图像的文字描述，例如：/nano 一只坐在键盘上的橙色猫，赛博朋克风格。"
             )
             return
 
@@ -615,18 +615,18 @@ class MyPlugin(Star):
 
 
 
-    @filter.command("改图")
+    @filter.command("edit")
     async def edit_image_command(
         self,
         event: AstrMessageEvent,
         edit_description: str = "",
     ):
-        """改图指令 `/改图`，专注于基于用户提供或引用的图片进行修改。
+        """改图指令 `/edit`，专注于基于用户提供或引用的图片进行修改。
 
         使用示例：
-        - `/改图 把这张图改成赛博朋克风格` + 图片
-        - `/改图` + 图片 + `把这张图改成赛博朋克风格`
-        - 回复一条包含图片的消息并输入：`/改图 给这张图加上蓝色霓虹背景`
+        - `/edit 把这张图改成赛博朋克风格` + 图片
+        - `/edit` + 图片 + `把这张图改成赛博朋克风格`
+        - 回复一条包含图片的消息并输入：`/edit 给这张图加上蓝色霓虹背景`
         """
         if not self._is_group_allowed(event):
             return
@@ -640,14 +640,14 @@ class MyPlugin(Star):
         nap_server_port = self.nap_server_port
 
         # 从消息中提取文本描述，支持图片在文字前后的情况
-        extracted_description = self._extract_text_from_message(event, "改图")
+        extracted_description = self._extract_text_from_message(event, "edit")
         if extracted_description:
             edit_description = extracted_description
 
         input_images: list[str] = await self._collect_input_images(event)
 
         if not input_images:
-            yield event.plain_result("请先发送一张图片，或回复包含图片的消息后再使用 /改图 指令。")
+            yield event.plain_result("请先发送一张图片，或回复包含图片的消息后再使用 /edit 指令。")
             return
 
         if not edit_description:
@@ -684,7 +684,7 @@ class MyPlugin(Star):
             error_chain = [Plain(f"改图失败: {str(e)}")]
             yield event.chain_result(error_chain)
 
-    @filter.command("img帮助")
+    @filter.command("imghelp")
     async def img_help(self, event: AstrMessageEvent):
         """列出本插件支持的图像相关指令。"""
         if not self._is_group_allowed(event):
@@ -692,7 +692,8 @@ class MyPlugin(Star):
 
         lines = [
             "本插件支持的图像相关指令：",
-            "/生图 文本 —— 根据文字描述生成图片",
-            "/改图 + 图片 —— 基于已有图片进行改图",
+            "/nano 文本 —— 根据文字描述生成图片",
+            "/edit + 图片 —— 基于已有图片进行改图",
+            "/imghelp —— 显示此帮助信息",
         ]
         yield event.plain_result("\n".join(lines))
