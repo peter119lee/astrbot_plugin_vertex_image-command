@@ -75,6 +75,13 @@
         "default": 60,
         "obvious_hint": false
     },
+    "max_edit_images": {
+        "description": "编辑会话最多保留的参考图数量",
+        "type": "int",
+        "hint": "建议 1-10。超过数量上限时，后续图片会被忽略并给出提示。",
+        "default": 10,
+        "obvious_hint": false
+    },
     "safety_filter_hate_speech": {
         "description": "仇恨言论过滤",
         "type": "string",

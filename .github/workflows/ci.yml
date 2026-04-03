@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate JSON schema
+        run: python -m json.tool _conf_schema.json > /dev/null
+
+      - name: Compile Python sources
+        run: |
+          python -m py_compile \
+            main.py \
+            utils/file_send_server.py \
+            utils/security.py \
+            utils/ttp.py

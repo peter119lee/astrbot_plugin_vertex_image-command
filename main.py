@@ -2,12 +2,7 @@ import asyncio
 import base64
 import re
 import time
-import ipaddress
-import socket
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
-
-import aiohttp
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger
@@ -15,6 +10,7 @@ from astrbot.api.all import Image, Plain
 from astrbot.core.message.components import Reply
 from .utils.ttp import generate_image_vertex
 from .utils.file_send_server import send_file
+from .utils.security import safe_download_image, validate_model_name
 
 
 @dataclass
@@ -29,6 +25,9 @@ class EditSession:
 
 @register("astrbot_plugin_vertex_image_command", "YanL", "使用 Google Vertex AI 生成图片", "1.0.0")
 class MyPlugin(Star):
+    _DEFAULT_EDIT_SESSION_TIMEOUT_SECONDS = 60
+    _DEFAULT_MAX_EDIT_IMAGES = 10
+
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
 
@@ -36,10 +35,12 @@ class MyPlugin(Star):
         self.vertex_api_keys = self._normalize_api_keys(config.get("vertex_api_key"))
 
         # 模型配置
-        self.model_name = config.get("model_name", "gemini-3-pro-image-preview").strip()
+        self.model_name = self._resolve_model_name(
+            config.get("model_name", "gemini-3-pro-image-preview")
+        )
 
         # 重试配置
-        self.max_retry_attempts = config.get("max_retry_attempts", 3)
+        self.max_retry_attempts = int(config.get("max_retry_attempts", 3) or 3)
 
         # NAP 文件服务器配置
         self.nap_server_address = config.get("nap_server_address")
@@ -68,6 +69,16 @@ class MyPlugin(Star):
         # 图像生成配置
         self.aspect_ratio = (config.get("aspect_ratio") or "").strip()
         self.default_resolution = int(config.get("default_resolution", 0) or 0)
+        self.edit_session_timeout_seconds = self._DEFAULT_EDIT_SESSION_TIMEOUT_SECONDS
+        self.max_edit_images = max(
+            1,
+            int(
+                config.get(
+                    "max_edit_images", self._DEFAULT_MAX_EDIT_IMAGES
+                )
+                or self._DEFAULT_MAX_EDIT_IMAGES
+            ),
+        )
 
         # C-01: 全局并发限制 (例如 10)
         self._concurrency_limit = asyncio.Semaphore(10)
@@ -91,15 +102,23 @@ class MyPlugin(Star):
             return f"{group_id}_{user_id}"
         return f"private_{user_id}"
 
-    def _get_active_session(self, key: str) -> EditSession | None:
-        """获取活跃会话，如果已超时则自动清理并返回 None"""
+    def _resolve_model_name(self, raw_name: str | None) -> str:
+        try:
+            return validate_model_name(raw_name or "")
+        except ValueError as e:
+            fallback = "gemini-3-pro-image-preview"
+            logger.warning(f"模型名配置无效，已回退到默认模型 {fallback}: {e}")
+            return fallback
+
+    def _get_active_session(self, key: str) -> tuple[EditSession | None, bool]:
+        """获取活跃会话，返回 (session, timed_out)。"""
         session = self._edit_sessions.get(key)
         if session is None:
-            return None
-        if time.time() - session.created_at > 60:
+            return None, False
+        if time.time() - session.created_at > self.edit_session_timeout_seconds:
             del self._edit_sessions[key]
-            return None
-        return session
+            return None, True
+        return session, False
 
     def _get_bot_client(self, event: AstrMessageEvent):
         """尝试从 event 中获取底层 OneBot client 实例"""
@@ -152,6 +171,26 @@ class MyPlugin(Star):
         ratio = ratio or self.aspect_ratio
         resolution = resolution or self.default_resolution
         return ratio, resolution, " ".join(remaining)
+
+    def _get_command_prefixes(self) -> tuple[str, ...]:
+        prefixes = ["/", "#", "!"]
+        try:
+            config = self.context.get_config() if self.context else {}
+        except Exception:
+            return tuple(prefixes)
+
+        if not isinstance(config, dict):
+            return tuple(prefixes)
+
+        for key in ("command_prefixes", "command_prefix", "cmd_prefix", "prefix"):
+            value = config.get(key)
+            if isinstance(value, list):
+                dynamic = [str(item).strip() for item in value if str(item).strip()]
+                if dynamic:
+                    return tuple(dict.fromkeys(dynamic + prefixes))
+            elif isinstance(value, str) and value.strip():
+                return tuple(dict.fromkeys([value.strip(), *prefixes]))
+        return tuple(prefixes)
 
     async def _send_ephemeral(self, event: AstrMessageEvent, text: str, delay: float = 5.0) -> bool:
         """发送临时消息，delay 秒后自动撤回。成功返回 True，失败返回 False。"""
@@ -268,6 +307,27 @@ class MyPlugin(Star):
             resolution=resolution or self.default_resolution,
         )
 
+    def _format_timeout_message(self) -> str:
+        return "编辑会话已超时，已自动取消。请重新发送 /edit 开始。"
+
+    def _format_image_limit_message(
+        self,
+        accepted_count: int,
+        total_count: int,
+        ignored_count: int,
+    ) -> str:
+        if accepted_count > 0:
+            return (
+                f"已收到 {accepted_count} 张图片（共 {total_count} 张）。\n"
+                f"当前会话最多保留 {self.max_edit_images} 张图片，多余 {ignored_count} 张已忽略。\n"
+                "继续发送描述，或发送 /ok 开始处理。"
+            )
+        return (
+            f"当前会话最多保留 {self.max_edit_images} 张图片，"
+            f"刚发送的 {ignored_count} 张已忽略。\n"
+            "请直接发送描述，或发送 /ok 开始处理。"
+        )
+
     # ── 配置规范化 ────────────────────────────────────────────────
 
     @staticmethod
@@ -361,30 +421,6 @@ class MyPlugin(Star):
 
     # ── 安全检查 ──────────────────────────────────────────────────
 
-    @staticmethod
-    def _is_safe_url(url: str) -> bool:
-        try:
-            parsed = urlparse(url)
-            if parsed.scheme not in ('http', 'https'):
-                return False
-            hostname = parsed.hostname
-            if not hostname:
-                return False
-            try:
-                addr_info = socket.getaddrinfo(hostname, None)
-            except socket.gaierror:
-                return False
-            for family, socktype, proto, canonname, sockaddr in addr_info:
-                ip_str = sockaddr[0]
-                ip = ipaddress.ip_address(ip_str)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
-                    logger.warning(f"检测到不安全的 IP 地址: {ip_str} ({hostname})")
-                    return False
-            return True
-        except Exception as e:
-            logger.warning(f"URL 安全检查失败: {e}")
-            return False
-
     # ── 错误消息 ──────────────────────────────────────────────────
 
     @staticmethod
@@ -395,6 +431,11 @@ class MyPlugin(Star):
             return f"{command_name}失败：未配置 Vertex AI API 密钥。"
         if error_reason == "RATE_LIMITED":
             return f"⏳ {command_name}失败：API 请求频率超限，请稍后再试。"
+        if error_reason == "BAD_REQUEST":
+            return (
+                f"{command_name}失败：请求参数不被当前模型接受。"
+                "请检查模型名、分辨率和参考图数量后重试。"
+            )
         return f"{command_name}失败，请检查 Vertex AI API 配置和网络连接。"
 
     # ── 图片收集 ──────────────────────────────────────────────────
@@ -498,19 +539,13 @@ class MyPlugin(Star):
                         img_url = seg_data.url
                     if img_url:
                         logger.info(f"从被引用消息获取到图片 URL: {img_url[:50]}...")
-                        if not self._is_safe_url(img_url):
-                            logger.warning(f"拦截到不安全的图片 URL: {img_url}")
+                        img_bytes = await safe_download_image(img_url)
+                        if not img_bytes:
+                            logger.warning(f"安全下载引用图片失败: {img_url}")
                             continue
-                        try:
-                            async with aiohttp.ClientSession() as session:
-                                async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                                    if resp.status == 200:
-                                        img_bytes = await resp.read()
-                                        base64_data = base64.b64encode(img_bytes).decode('utf-8')
-                                        images.append(base64_data)
-                                        logger.info("成功通过 API 获取被引用消息中的图片")
-                        except Exception as e:
-                            logger.warning(f"下载图片失败: {e}")
+                        base64_data = base64.b64encode(img_bytes).decode('utf-8')
+                        images.append(base64_data)
+                        logger.info("成功通过 API 获取被引用消息中的图片")
         except Exception as e:
             logger.warning(f"通过 API 获取被引用消息失败: {e}")
         return images
@@ -637,6 +672,10 @@ class MyPlugin(Star):
 
         # 收集本条消息中可能附带的图片
         initial_images = await self._collect_input_images(event)
+        ignored_initial_images = 0
+        if len(initial_images) > self.max_edit_images:
+            ignored_initial_images = len(initial_images) - self.max_edit_images
+            initial_images = initial_images[:self.max_edit_images]
 
         self._edit_sessions[key] = EditSession(
             images=initial_images,
@@ -648,8 +687,13 @@ class MyPlugin(Star):
             f"编辑会话已开始！{img_hint}\n"
             "请逐条发送图片，然后发送文字描述。\n"
             "完成后发送 /ok 开始处理，发送 /cancel 取消。\n"
-            "超过 60 秒未操作将自动取消。"
+            f"超过 {self.edit_session_timeout_seconds} 秒未操作将自动取消。"
         )
+        if ignored_initial_images > 0:
+            hint_msg += (
+                f"\n当前会话最多保留 {self.max_edit_images} 张图片，"
+                f"多余 {ignored_initial_images} 张已忽略。"
+            )
         if not await self._send_ephemeral(event, hint_msg):
             yield event.plain_result(hint_msg)
 
@@ -659,11 +703,10 @@ class MyPlugin(Star):
     async def edit_confirm(self, event: AstrMessageEvent):
         """确认改图会话，开始处理。"""
         key = self._get_session_key(event)
-        session = self._get_active_session(key)
+        session, timed_out = self._get_active_session(key)
 
-        if session is None and key in self._edit_sessions:
-            # 会话存在但已超时（_get_active_session 已清理）
-            timeout_msg = "编辑会话已超时，已自动取消。请重新发送 /edit 开始。"
+        if session is None and timed_out:
+            timeout_msg = self._format_timeout_message()
             if not await self._send_ephemeral(event, timeout_msg):
                 yield event.plain_result(timeout_msg)
             return
@@ -708,6 +751,9 @@ class MyPlugin(Star):
         except (ConnectionError, TimeoutError) as e:
             logger.error(f"网络连接错误导致改图失败: {e}")
             yield event.chain_result([Plain(f"网络连接错误，改图失败: {str(e)}")])
+        except ValueError as e:
+            logger.error(f"参数错误导致改图失败: {e}")
+            yield event.chain_result([Plain(f"参数错误，改图失败: {str(e)}")])
         except Exception as e:
             logger.error(f"改图过程出现未预期的错误: {e}")
             yield event.chain_result([Plain(f"改图失败: {str(e)}")])
@@ -732,16 +778,15 @@ class MyPlugin(Star):
         # 跳过指令消息（由对应的 command handler 处理）
         msg = getattr(event, "message_str", "") or ""
         msg_stripped = msg.strip()
-        # 检查是否以指令前缀开头（兼容 / 和 # 以及 AstrBot 配置的前缀）
-        if msg_stripped and re.match(r'^[/#!]', msg_stripped):
+        # 检查是否以指令前缀开头，避免把命令误当作描述写入会话
+        if msg_stripped and msg_stripped.startswith(self._get_command_prefixes()):
             return
 
         key = self._get_session_key(event)
-        session = self._get_active_session(key)
+        session, timed_out = self._get_active_session(key)
         if session is None:
-            if key in self._edit_sessions:
-                # 超时了，通知用户
-                timeout_msg = "编辑会话已超时，已自动取消。请重新发送 /edit 开始。"
+            if timed_out:
+                timeout_msg = self._format_timeout_message()
                 if not await self._send_ephemeral(event, timeout_msg):
                     yield event.plain_result(timeout_msg)
             return
@@ -752,11 +797,22 @@ class MyPlugin(Star):
         # 收集图片
         new_images = await self._collect_input_images(event)
         if new_images:
-            session.images.extend(new_images)
-            img_msg = (
-                f"已收到 {len(new_images)} 张图片（共 {len(session.images)} 张）。\n"
-                "继续发送图片/描述，或发送 /ok 开始处理。"
-            )
+            available_slots = max(self.max_edit_images - len(session.images), 0)
+            accepted_images = new_images[:available_slots]
+            ignored_images = len(new_images) - len(accepted_images)
+            if accepted_images:
+                session.images.extend(accepted_images)
+            if ignored_images > 0:
+                img_msg = self._format_image_limit_message(
+                    accepted_count=len(accepted_images),
+                    total_count=len(session.images),
+                    ignored_count=ignored_images,
+                )
+            else:
+                img_msg = (
+                    f"已收到 {len(accepted_images)} 张图片（共 {len(session.images)} 张）。\n"
+                    "继续发送图片/描述，或发送 /ok 开始处理。"
+                )
             if not await self._send_ephemeral(event, img_msg):
                 yield event.plain_result(img_msg)
             return
@@ -804,7 +860,8 @@ class MyPlugin(Star):
             "  3. 发送文字描述（可附带标志）",
             "  4. 发送 /ok 开始处理",
             "  * 发送 /cancel 取消",
-            "  * 超过 60 秒未操作自动取消",
+            f"  * 超过 {self.edit_session_timeout_seconds} 秒未操作自动取消",
+            f"  * 最多保留 {self.max_edit_images} 张图片",
             "",
             "宽高比标志：",
             "  --16:9 或 -l  横屏",

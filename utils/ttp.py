@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from astrbot.api import logger
 
+from .security import safe_download_image, validate_model_name
+
 
 class ImageGeneratorState:
     """图像生成器状态管理类，用于处理并发安全"""
@@ -202,6 +204,8 @@ async def generate_image_vertex(
         logger.error("generate_image_vertex: 未提供 Vertex AI API 密钥")
         return None, None, "NO_API_KEY"
 
+    model = validate_model_name(model)
+
     # 构建 Vertex AI API URL
     base_url = "https://aiplatform.googleapis.com/v1/publishers/google/models"
     
@@ -282,7 +286,7 @@ async def generate_image_vertex(
         "safetySettings": safety_settings_payload
     }
 
-    timeout = aiohttp.ClientTimeout(total=120)
+    timeout = aiohttp.ClientTimeout(total=300)
 
     # 记录连续 429 错误次数，用于判断是否全部因限流失败
     rate_limit_count = 0
@@ -381,19 +385,14 @@ async def generate_image_vertex(
                         # 如果获取到 URL，尝试下载图像
                         if image_url and image_url.startswith("http"):
                             try:
-                                async with session.get(image_url) as img_response:
-                                    if img_response.status == 200:
-                                        # 从 Content-Type 获取正确的图片格式
-                                        content_type = img_response.headers.get("Content-Type", "image/png")
-                                        if "/" in content_type:
-                                            image_format = content_type.split("/")[1].split(";")[0]
-                                        img_data = await img_response.read()
-                                        base64_string = base64.b64encode(img_data).decode("utf-8")
-                                        image_url, image_path = await save_base64_image(
-                                            base64_string, image_format, data_dir
-                                        )
-                                        if image_url and image_path:
-                                            return image_url, image_path, None
+                                img_data = await safe_download_image(image_url)
+                                if img_data:
+                                    base64_string = base64.b64encode(img_data).decode("utf-8")
+                                    image_url, image_path = await save_base64_image(
+                                        base64_string, image_format, data_dir
+                                    )
+                                    if image_url and image_path:
+                                        return image_url, image_path, None
                             except Exception as e:
                                 logger.warning(f"下载图像失败: {e}")
 
@@ -422,7 +421,7 @@ async def generate_image_vertex(
                     elif response.status == 400:
                         logger.error(f"请求参数错误: {response_text[:500]}")
                         # 400 错误通常是请求格式问题，不需要轮换密钥
-                        return None, None, "API_ERROR"
+                        return None, None, "BAD_REQUEST"
 
                     elif response.status == 401 or response.status == 403:
                         logger.error(f"API 认证失败 (状态码 {response.status})，尝试轮换密钥")
