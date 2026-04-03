@@ -20,6 +20,14 @@
         "default": 3,
         "obvious_hint": true
     },
+    "aspect_ratio": {
+        "description": "生成图像的宽高比",
+        "type": "string",
+        "hint": "留空则由模型自动决定。可选值: 1:1, 16:9, 9:16, 4:3, 3:4。分辨率由模型决定（gemini-3-pro 最高 4096px，gemini-2.5-flash 最高 1024px）。",
+        "default": "",
+        "options": ["", "1:1", "16:9", "9:16", "4:3", "3:4"],
+        "obvious_hint": true
+    },
     "nap_server_address": {
         "description": "NAPcat 服务地址，若与服务器在同一服务器上请填写 localhost",
         "type": "string",

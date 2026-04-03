@@ -161,6 +161,7 @@ async def generate_image_vertex(
     max_retry_attempts: int = 3,
     data_dir=None,
     safety_settings: dict | None = None,
+    aspect_ratio: str = "",
 ):
     """
     使用 Google Vertex AI Gemini 模型生成图像
@@ -208,7 +209,10 @@ async def generate_image_vertex(
     
     # 添加文本提示
     # 添加明确的图像生成指令
-    full_prompt = f"Generate an image based on the following description. Output only the image, no text explanation needed.\n\n{prompt}"
+    aspect_hint = ""
+    if aspect_ratio:
+        aspect_hint = f" The image aspect ratio should be {aspect_ratio}."
+    full_prompt = f"Generate an image based on the following description. Output only the image, no text explanation needed.{aspect_hint}\n\n{prompt}"
     parts.append({"text": full_prompt})
     
     # 添加输入图像（如果有）
@@ -254,6 +258,15 @@ async def generate_image_vertex(
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": default_thresholds["dangerous_content"]},
     ]
 
+    generation_config = {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "maxOutputTokens": 8192,
+    }
+
+    if aspect_ratio:
+        generation_config["aspectRatio"] = aspect_ratio
+
     payload = {
         "contents": [
             {
@@ -261,11 +274,7 @@ async def generate_image_vertex(
                 "parts": parts
             }
         ],
-        "generationConfig": {
-            "temperature": 1.0,
-            "topP": 0.95,
-            "maxOutputTokens": 8192
-        },
+        "generationConfig": generation_config,
         "safetySettings": safety_settings_payload
     }
 
